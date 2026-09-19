@@ -192,7 +192,7 @@ function stereoStep(a: Analysis): Step | null {
     id: "stereo",
     title: many ? "Label each double bond" : `Same side or opposite? → ${first.descriptor}`,
     detail,
-    chip: many ? a.stereo.map((s) => `${s.descriptor}-${s.locant}`).join(",") : first.descriptor,
+    chip: many ? a.stereo.map((s) => `${s.descriptor}-${s.locant}`).join(",") : `${first.descriptor}-${first.locant}`,
     highlight: { bonds: a.stereo.map((s) => s.bondId), atoms: a.atoms, accent: "bond" },
   };
 }
@@ -240,7 +240,13 @@ function alphabetStep(a: Analysis): Step | null {
 function finalStep(a: Analysis): Step {
   const pieces = [...a.groups.map((g) => g.text), a.parent];
   if (a.esterWord) pieces.unshift(`${a.esterWord} (on the ester oxygen)`);
-  if (a.stereo.length) pieces.unshift(a.name.split("-")[0].replace(/[()]/g, ""));
+  if (a.stereo.length) {
+    pieces.push(
+      a.stereo.length === 1 && a.eneLocants.length === 1
+        ? a.stereo[0].descriptor
+        : a.stereo.map((s) => `${s.descriptor}-${s.locant}`).join(", "),
+    );
+  }
   return {
     id: "final",
     title: "Put it together",

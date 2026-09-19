@@ -33,6 +33,39 @@ import type { Molecule } from "./types";
 
 export type ParentKind = "chain" | "ring" | "benzene";
 
+/**
+ * Puts cis/trans immediately before the locant it belongs to — the high-school
+ * form: but-cis-2-ene, cis-2-butene, hexa-trans-2,cis-4-diene.
+ */
+export function embedStereo(parent: string, stereo: Stereo[], eneLocants: number[]): string {
+  if (!stereo.length || !eneLocants.length) return parent;
+  const byLocant = new Map(stereo.map((s) => [s.locant, s.descriptor]));
+  const plain = eneLocants.join(",");
+  const tagged = eneLocants
+    .map((loc) => {
+      const descriptor = byLocant.get(loc);
+      return descriptor ? `${descriptor}-${loc}` : String(loc);
+    })
+    .join(",");
+  if (tagged === plain) return parent;
+
+  const leading = new RegExp(`^${plain.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=-)`);
+  if (leading.test(parent)) return parent.replace(leading, tagged);
+
+  const mid = `-${plain}-`;
+  const at = parent.indexOf(mid);
+  if (at >= 0) {
+    return `${parent.slice(0, at)}-${tagged}-${parent.slice(at + mid.length)}`;
+  }
+
+  // Fallback if the locant run isn't a clean block (shouldn't happen often).
+  const single = stereo.length === 1 && eneLocants.length === 1;
+  const prefix = single
+    ? `${stereo[0].descriptor}-`
+    : `${stereo.map((s) => `${s.descriptor}-${s.locant}`).join(",")}-`;
+  return prefix + parent;
+}
+
 export type Locant = number | "N";
 
 export type Substituent = {
@@ -806,15 +839,10 @@ export function nameMolecule(mol: Molecule, options: NameOptions = {}): NameResu
     if (bond.order === 3) yneBonds.push(bond.id);
   }
 
-  // one double bond in the whole parent needs no locant: cis-but-2-ene
-  const stereoPrefix =
-    stereo.length === 0
-      ? ""
-      : stereo.length === 1 && best.eneLocants.length === 1
-        ? `${stereo[0].descriptor}-`
-        : `${stereo.map((s) => `${s.descriptor}-${s.locant}`).join(",")}-`;
-
-  let name = stereoPrefix + joinName(prefixes, parent);
+  // High-school style: cis/trans sits right before the locant it belongs to
+  // (but-cis-2-ene, cis-2-butene, hexa-trans-2,cis-4-diene).
+  const parentWithStereo = embedStereo(parent, stereo, best.eneLocants);
+  let name = joinName(prefixes, parentWithStereo);
   if (esterWord) name = `${esterWord} ${name}`;
 
   const numbers: Record<string, number> = {};

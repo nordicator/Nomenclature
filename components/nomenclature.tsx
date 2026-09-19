@@ -398,19 +398,23 @@ export function Nomenclature() {
   const handleDraw = useCallback(
     (next: Molecule) => {
       setMolecule(next);
-      if (mode !== "challenge" || phase !== "playing" || answered) return;
-      if (current?.kind !== "draw" || !targetName) return;
-      const named = nameMolecule(next, { style });
-      if (named.ok && named.name === targetName) finish(true);
+      setWrong(false);
     },
-    [answered, current, finish, mode, phase, setMolecule, style, targetName],
+    [setMolecule],
   );
 
   const submitAnswer = useCallback(() => {
     if (!current || answered) return;
-    if (checkName(answer, current.challenge.molecule)) finish(true);
+    if (current.kind === "name") {
+      if (checkName(answer, current.challenge.molecule)) finish(true);
+      else setWrong(true);
+      return;
+    }
+    if (!targetName) return;
+    const named = nameMolecule(molecule, { style });
+    if (named.ok && named.name === targetName) finish(true);
     else setWrong(true);
-  }, [answer, answered, current, finish]);
+  }, [answer, answered, current, finish, molecule, style, targetName]);
 
   /* ---- hints ---- */
 
@@ -792,6 +796,19 @@ export function Nomenclature() {
                       />
                       <Button size="sm" onClick={submitAnswer} disabled={!answer.trim()}>
                         Check
+                      </Button>
+                      {wrong ? <span className="text-xs text-destructive">not quite — try again</span> : null}
+                    </>
+                  ) : null}
+
+                  {current?.kind === "draw" && !answered ? (
+                    <>
+                      <Button
+                        size="sm"
+                        onClick={submitAnswer}
+                        disabled={!molecule.atoms.length}
+                      >
+                        Submit
                       </Button>
                       {wrong ? <span className="text-xs text-destructive">not quite — try again</span> : null}
                     </>
