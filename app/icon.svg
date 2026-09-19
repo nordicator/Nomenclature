@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+  <!-- hexamethylcyclohexane: ring + methyl stub on every carbon -->
+  <g stroke="#18181b" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+    <!-- cyclohexane -->
+    <polygon points="16,7.5 23.4,11.75 23.4,20.25 16,24.5 8.6,20.25 8.6,11.75" />
+    <!-- methyls (outward from each ring carbon) -->
+    <line x1="16" y1="7.5" x2="16" y2="2.8" />
+    <line x1="23.4" y1="11.75" x2="27.5" y2="9.35" />
+    <line x1="23.4" y1="20.25" x2="27.5" y2="22.65" />
+    <line x1="16" y1="24.5" x2="16" y2="29.2" />
+    <line x1="8.6" y1="20.25" x2="4.5" y2="22.65" />
+    <line x1="8.6" y1="11.75" x2="4.5" y2="9.35" />
+  </g>
+</svg>
