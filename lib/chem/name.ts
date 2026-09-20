@@ -34,8 +34,8 @@ import type { Molecule } from "./types";
 export type ParentKind = "chain" | "ring" | "benzene";
 
 /**
- * Puts the stereo label immediately before the locant it belongs to:
- * but-cis-2-ene, cis-2-butene, pent-(Z)-2-ene, hexa-trans-2,cis-4-diene.
+ * Puts cis/trans immediately before the locant it belongs to:
+ * but-cis-2-ene, cis-2-butene, hexa-trans-2,cis-4-diene.
  */
 export function embedStereo(parent: string, stereo: Stereo[], eneLocants: number[]): string {
   if (!stereo.length || !eneLocants.length) return parent;
@@ -58,12 +58,9 @@ export function embedStereo(parent: string, stereo: Stereo[], eneLocants: number
     return `${parent.slice(0, at)}-${tagged}-${parent.slice(at + mid.length)}`;
   }
 
-  // Fallback if the locant run isn't a clean block.
   const single = stereo.length === 1 && eneLocants.length === 1;
   const front = single
-    ? stereo[0].descriptor === "E" || stereo[0].descriptor === "Z"
-      ? `(${stereo[0].descriptor})-`
-      : `${stereo[0].descriptor}-`
+    ? `${stereo[0].descriptor}-`
     : `${stereo.map((s) => stereoTag(s.descriptor, s.locant)).join(",")}-`;
   return front + parent;
 }

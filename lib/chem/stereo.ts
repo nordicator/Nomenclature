@@ -2,8 +2,8 @@ import { ATOMIC_NUMBER, MAX_VALENCE, type Element } from "./elements";
 import { element, neighbors, type Graph } from "./graph";
 import type { Bond, Molecule } from "./types";
 
-/** cis/trans for disubstituted alkenes; E/Z once a third substituent appears. */
-export type StereoDescriptor = "cis" | "trans" | "E" | "Z";
+/** cis/trans across a C=C (E/Z geometry, spelled the intro-organic way). */
+export type StereoDescriptor = "cis" | "trans";
 
 export type Stereo = {
   bondId: string;
@@ -11,7 +11,7 @@ export type Stereo = {
   descriptor: StereoDescriptor;
   /**
    * True when each end of the C=C has exactly one non-H substituent.
-   * Only then is cis/trans unambiguous; otherwise we use E/Z (CIP).
+   * False when CIP ranking was needed because an end has two non-H groups.
    */
   simple: boolean;
 };
@@ -116,13 +116,10 @@ function pickHigher(
 /**
  * Stereochemistry of one C=C from the drawing.
  *
- * Rules (as taught in intro organic, matching IUPAC practice):
- * - Each end of the double bond must have two different substituents (or one
- *   substituent + H). If either end has two identical groups, no label.
- * - Geometry: are the two ranking substituents on the same side of the C=C axis?
- * - If each end has exactly one non-H substituent (disubstituted alkene) → cis/trans.
- * - If either end has two non-H substituents (tri/tetrasubstituted) → E/Z by CIP,
- *   because cis/trans would be ambiguous about which groups you mean.
+ * - Each end must have two different substituents (or one + H). Identical
+ *   groups on one end → no label.
+ * - When an end has two non-H groups, CIP picks which one counts.
+ * - Same side of the bond axis → cis; opposite → trans.
  */
 export function bondStereo(
   g: Graph,
@@ -151,24 +148,18 @@ export function bondStereo(
   const subB = atoms.get(topB)!;
 
   const sideA = substituentSide(a, b, subA);
+  // Mirror b→a into a→b's frame: same geometric side iff sideA === -sideB.
   const sideB = substituentSide(b, a, subB);
-  // Note: sideB uses b→a so a positive side is mirrored; flip to share a's frame.
-  // substituentSide(b, a, subB) positive means subB is on the opposite half-plane
-  // from substituentSide(a, b, ·) positive — so same geometric side of the bond
-  // when sideA === -sideB.
   if (sideA === null || sideB === null) return null;
   const sameSide = sideA === -sideB;
 
-  const simple = aSubs.length === 1 && bSubs.length === 1;
-  if (simple) {
-    return { descriptor: sameSide ? "cis" : "trans", simple: true };
-  }
-  // Tri- or tetrasubstituted: CIP priorities already picked; report E/Z.
-  return { descriptor: sameSide ? "Z" : "E", simple: false };
+  return {
+    descriptor: sameSide ? "cis" : "trans",
+    simple: aSubs.length === 1 && bSubs.length === 1,
+  };
 }
 
-/** Tag written next to a locant: cis-2, (Z)-2, … */
+/** Tag written next to a locant: cis-2, trans-4, … */
 export function stereoTag(descriptor: StereoDescriptor, locant: number): string {
-  if (descriptor === "E" || descriptor === "Z") return `(${descriptor})-${locant}`;
   return `${descriptor}-${locant}`;
 }

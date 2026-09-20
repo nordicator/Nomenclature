@@ -177,29 +177,20 @@ function stereoStep(a: Analysis): Step | null {
   const first = a.stereo[0];
   const many = a.stereo.length > 1;
   const sideWord = (same: boolean) => (same ? "the same side" : "opposite sides");
-  const isEZ = first.descriptor === "E" || first.descriptor === "Z";
   const detail = many
     ? `Each double bond gets its own label: ${a.stereo
         .map((s) => `C${s.locant} is ${s.descriptor}`)
-        .join(", ")}. For a simple alkene (one group + H on each carbon) we say cis/trans; once a carbon carries two non-H groups we switch to E/Z using CIP priority.`
+        .join(", ")}. cis means the ranking groups sit on the same side of the bond, trans means opposite sides.`
     : first.simple
       ? `Each carbon of the C=C carries one chain and one hydrogen. The two chains are drawn on ${sideWord(
           first.descriptor === "cis",
         )} of the double bond, which makes it ${first.descriptor}.`
-      : isEZ
-        ? `This alkene has more than one non-H group on at least one carbon of the C=C, so cis/trans would be ambiguous. We rank the two groups on each end by atomic number (CIP); the higher-priority pair sits on ${sideWord(
-            first.descriptor === "Z",
-          )}, so the configuration is ${first.descriptor}.`
-        : `One of the carbons carries two different groups, so rank them by atomic number first — the heavier atom wins. The two winners are on ${sideWord(
-            first.descriptor === "cis",
-          )}, so it is ${first.descriptor}.`;
+      : `One of the carbons carries two different groups, so rank them by atomic number first — the heavier atom wins. The two winners are on ${sideWord(
+          first.descriptor === "cis",
+        )}, so it is ${first.descriptor}.`;
   return {
     id: "stereo",
-    title: many
-      ? "Label each double bond"
-      : first.simple
-        ? `Same side or opposite? → ${first.descriptor}`
-        : `E or Z? → ${first.descriptor}`,
+    title: many ? "Label each double bond" : `Same side or opposite? → ${first.descriptor}`,
     detail,
     chip: many
       ? a.stereo.map((s) => `${s.descriptor}-${s.locant}`).join(",")

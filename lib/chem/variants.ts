@@ -5,17 +5,16 @@ import type { Molecule } from "./types";
 
 export type NameVariant = { name: string; note: string };
 
-/** cis↔Z and trans↔E for the same geometry. */
+/** cis/trans is how the app spells it; E/Z says the same thing in CIP letters. */
 function ezVersion(name: string, analysis: Analysis): string | null {
   const { stereo } = analysis;
   if (!stereo.length) return null;
+  const letter = (descriptor: string) => (descriptor === "cis" ? "Z" : "E");
   let out = name;
   let changed = false;
   for (const entry of stereo) {
-    const letter = entry.descriptor === "cis" || entry.descriptor === "Z" ? "Z" : "E";
     const from = stereoTag(entry.descriptor, entry.locant);
-    const to = `(${letter})-${entry.locant}`;
-    if (from === to) continue;
+    const to = `(${letter(entry.descriptor)})-${entry.locant}`;
     if (out.includes(from)) {
       out = out.replace(from, to);
       changed = true;
@@ -23,21 +22,18 @@ function ezVersion(name: string, analysis: Analysis): string | null {
   }
   if (changed) return out;
 
-  // Old front-prefix forms.
   const single = stereo.length === 1 && analysis.eneLocants.length === 1;
-  const isEZ = stereo.every((s) => s.descriptor === "E" || s.descriptor === "Z");
-  if (isEZ) return null;
   const cisPrefix = single
     ? `${stereo[0].descriptor}-`
     : `${stereo.map((s) => `${s.descriptor}-${s.locant}`).join(",")}-`;
   if (!name.startsWith(cisPrefix)) return null;
   const ezPrefix = single
-    ? `(${stereo[0].descriptor === "cis" ? "Z" : "E"})-`
-    : `(${stereo.map((s) => `${s.locant}${s.descriptor === "cis" ? "Z" : "E"}`).join(",")})-`;
+    ? `(${letter(stereo[0].descriptor)})-`
+    : `(${stereo.map((s) => `${s.locant}${letter(s.descriptor)}`).join(",")})-`;
   return ezPrefix + name.slice(cisPrefix.length);
 }
 
-/** Older front-loaded spelling: cis-but-2-ene, (Z)-2-chloropent-2-ene. */
+/** Older front-loaded spelling: cis-but-2-ene, trans-2,cis-4-hexa-2,4-diene. */
 function frontStereoVersion(name: string, analysis: Analysis): string | null {
   const { stereo, eneLocants } = analysis;
   if (!stereo.length) return null;
@@ -59,9 +55,7 @@ function frontStereoVersion(name: string, analysis: Analysis): string | null {
 
   const single = stereo.length === 1 && eneLocants.length === 1;
   const front = single
-    ? stereo[0].descriptor === "E" || stereo[0].descriptor === "Z"
-      ? `(${stereo[0].descriptor})-`
-      : `${stereo[0].descriptor}-`
+    ? `${stereo[0].descriptor}-`
     : `${stereo.map((s) => stereoTag(s.descriptor, s.locant)).join(",")}-`;
   if (bare.startsWith(front)) return bare;
   if (single && bare.startsWith(`${stereoTag(stereo[0].descriptor, stereo[0].locant)}-`)) return bare;
@@ -104,7 +98,7 @@ export function nameVariants(mol: Molecule): { primary: string | null; alternati
     if (named.ok) add(named.name, spelling.note);
   }
   add(ezVersion(modern.name, modern.analysis), "E/Z instead of cis/trans");
-  add(frontStereoVersion(modern.name, modern.analysis), "stereo label at the front");
+  add(frontStereoVersion(modern.name, modern.analysis), "cis/trans at the front");
   if (isStraightAlkane(mol) && mol.atoms.length >= 4) add(`n-${modern.name}`, "retained “n-” prefix");
 
   return { primary: modern.name, alternatives };
