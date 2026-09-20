@@ -28,14 +28,14 @@ import {
   type NameStyle,
   type SuffixToken,
 } from "./roots";
-import { bondStereo, type Stereo } from "./stereo";
+import { bondStereo, stereoTag, type Stereo } from "./stereo";
 import type { Molecule } from "./types";
 
 export type ParentKind = "chain" | "ring" | "benzene";
 
 /**
- * Puts cis/trans immediately before the locant it belongs to — the high-school
- * form: but-cis-2-ene, cis-2-butene, hexa-trans-2,cis-4-diene.
+ * Puts the stereo label immediately before the locant it belongs to:
+ * but-cis-2-ene, cis-2-butene, pent-(Z)-2-ene, hexa-trans-2,cis-4-diene.
  */
 export function embedStereo(parent: string, stereo: Stereo[], eneLocants: number[]): string {
   if (!stereo.length || !eneLocants.length) return parent;
@@ -44,7 +44,7 @@ export function embedStereo(parent: string, stereo: Stereo[], eneLocants: number
   const tagged = eneLocants
     .map((loc) => {
       const descriptor = byLocant.get(loc);
-      return descriptor ? `${descriptor}-${loc}` : String(loc);
+      return descriptor ? stereoTag(descriptor, loc) : String(loc);
     })
     .join(",");
   if (tagged === plain) return parent;
@@ -58,12 +58,14 @@ export function embedStereo(parent: string, stereo: Stereo[], eneLocants: number
     return `${parent.slice(0, at)}-${tagged}-${parent.slice(at + mid.length)}`;
   }
 
-  // Fallback if the locant run isn't a clean block (shouldn't happen often).
+  // Fallback if the locant run isn't a clean block.
   const single = stereo.length === 1 && eneLocants.length === 1;
-  const prefix = single
-    ? `${stereo[0].descriptor}-`
-    : `${stereo.map((s) => `${s.descriptor}-${s.locant}`).join(",")}-`;
-  return prefix + parent;
+  const front = single
+    ? stereo[0].descriptor === "E" || stereo[0].descriptor === "Z"
+      ? `(${stereo[0].descriptor})-`
+      : `${stereo[0].descriptor}-`
+    : `${stereo.map((s) => stereoTag(s.descriptor, s.locant)).join(",")}-`;
+  return front + parent;
 }
 
 export type Locant = number | "N";
