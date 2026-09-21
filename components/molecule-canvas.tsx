@@ -23,7 +23,7 @@ import {
   type Point,
 } from "@/lib/chem/edit";
 import { MAX_VALENCE, type Element } from "@/lib/chem/elements";
-import type { Highlight } from "@/lib/chem/explain";
+import type { Highlight, HighlightAccent, HighlightLayer } from "@/lib/chem/explain";
 import type { Guidance } from "@/lib/chem/guidance";
 import { BOND_LENGTH } from "@/lib/chem/smiles";
 import type { BondOrder, Molecule } from "@/lib/chem/types";
@@ -48,11 +48,25 @@ export type Tool =
   | { kind: "group"; stamp: GroupStamp }
   | { kind: "erase" };
 
-const ACCENT: Record<NonNullable<Highlight["accent"]>, string> = {
+export const HIGHLIGHT_COLOR: Record<HighlightAccent, string> = {
   chain: "#2563eb",
   branch: "#ea580c",
   bond: "#0d9488",
   group: "#7c3aed",
+  cis: "#db2777",
+  trans: "#0891b2",
+};
+
+const ACCENT = HIGHLIGHT_COLOR;
+
+/** When several layers claim the same atom/bond, prefer the more specific accent. */
+const ACCENT_PRIORITY: Record<HighlightAccent, number> = {
+  chain: 1,
+  branch: 2,
+  bond: 3,
+  group: 4,
+  cis: 5,
+  trans: 5,
 };
 
 const GUIDE_COLOR = { add: "#2563eb", ok: "#16a34a", wrong: "#dc2626" } as const;
@@ -78,6 +92,8 @@ type Props = {
   onChange: (next: Molecule) => void;
   tool: Tool;
   highlight?: Highlight | null;
+  /** All-at-once colour layers (correct-answer overview). Ignored while `highlight` is set. */
+  layers?: HighlightLayer[] | null;
   guide?: Guidance | null;
   errorAtoms?: string[];
   showLabels?: boolean;
@@ -85,20 +101,29 @@ type Props = {
   /** View offset — drag the canvas (middle / right / Space+left) to pan. */
   pan?: ViewPan;
   onPanChange?: (pan: ViewPan) => void;
+  /** View scale — scroll wheel zooms toward the cursor. */
+  zoom?: number;
+  onZoomChange?: (zoom: number) => void;
   className?: string;
 };
+
+const MIN_ZOOM = 0.25;
+const MAX_ZOOM = 4;
 
 export function MoleculeCanvas({
   molecule,
   onChange,
   tool,
   highlight,
+  layers,
   guide,
   errorAtoms,
   showLabels = false,
   readOnly = false,
   pan = { x: 0, y: 0 },
   onPanChange,
+  zoom = 1,
+  onZoomChange,
   className,
 }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
@@ -106,6 +131,8 @@ export function MoleculeCanvas({
   const [panDrag, setPanDrag] = useState<PanDrag | null>(null);
   const [spaceHeld, setSpaceHeld] = useState(false);
   const [hover, setHover] = useState<string | null>(null);
+  const viewRef = useRef({ pan, zoom });
+  viewRef.current = { pan, zoom };
 
   useEffect(() => {
     const down = (event: KeyboardEvent) => {
@@ -126,6 +153,27 @@ export function MoleculeCanvas({
     };
   }, []);
 
+  useEffect(() => {
+    const el = svgRef.current;
+    if (!el || !onPanChange || !onZoomChange) return;
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      const { pan: currentPan, zoom: currentZoom } = viewRef.current;
+      const rect = el.getBoundingClientRect();
+      const sx = event.clientX - rect.left;
+      const sy = event.clientY - rect.top;
+      const factor = Math.exp(-event.deltaY * 0.0015);
+      const nextZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, currentZoom * factor));
+      if (nextZoom === currentZoom) return;
+      const wx = (sx - currentPan.x) / currentZoom;
+      const wy = (sy - currentPan.y) / currentZoom;
+      onPanChange({ x: sx - wx * nextZoom, y: sy - wy * nextZoom });
+      onZoomChange(nextZoom);
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [onPanChange, onZoomChange]);
+
   const byId = useMemo(() => new Map(molecule.atoms.map((a) => [a.id, a])), [molecule.atoms]);
   const ghostById = useMemo(
     () => new Map((guide?.ghost?.atoms ?? []).map((a) => [a.id, a])),
@@ -134,6 +182,39 @@ export function MoleculeCanvas({
   const accent = ACCENT[highlight?.accent ?? "chain"];
   const highlightAtoms = useMemo(() => new Set(highlight?.atoms ?? []), [highlight]);
   const highlightBonds = useMemo(() => new Set(highlight?.bonds ?? []), [highlight]);
+  const activeLayers = useMemo(
+    () => (highlight ? null : layers?.length ? layers : null),
+    [highlight, layers],
+  );
+  const atomAccent = useMemo(() => {
+    const map = new Map<string, HighlightAccent>();
+    if (!activeLayers) return map;
+    for (const layer of activeLayers) {
+      for (const id of layer.atoms ?? []) {
+        const prev = map.get(id);
+        if (!prev || ACCENT_PRIORITY[layer.accent] >= ACCENT_PRIORITY[prev]) map.set(id, layer.accent);
+      }
+    }
+    return map;
+  }, [activeLayers]);
+  const bondAccent = useMemo(() => {
+    const map = new Map<string, HighlightAccent>();
+    if (!activeLayers) return map;
+    for (const layer of activeLayers) {
+      for (const id of layer.bonds ?? []) {
+        const prev = map.get(id);
+        if (!prev || ACCENT_PRIORITY[layer.accent] >= ACCENT_PRIORITY[prev]) map.set(id, layer.accent);
+      }
+    }
+    return map;
+  }, [activeLayers]);
+  const overviewNumbers = useMemo(() => {
+    if (!activeLayers) return null;
+    for (const layer of activeLayers) {
+      if (layer.numbers && Object.keys(layer.numbers).length) return { numbers: layer.numbers, accent: layer.accent };
+    }
+    return null;
+  }, [activeLayers]);
   const errorSet = useMemo(() => new Set(errorAtoms ?? []), [errorAtoms]);
 
   const drawnElement = tool.kind === "atom" ? tool.element : "C";
@@ -169,8 +250,8 @@ export function MoleculeCanvas({
   const local = (event: React.PointerEvent): Point => {
     const rect = svgRef.current!.getBoundingClientRect();
     return {
-      x: event.clientX - rect.left - pan.x,
-      y: event.clientY - rect.top - pan.y,
+      x: (event.clientX - rect.left - pan.x) / zoom,
+      y: (event.clientY - rect.top - pan.y) / zoom,
     };
   };
 
@@ -178,6 +259,9 @@ export function MoleculeCanvas({
     const rect = svgRef.current!.getBoundingClientRect();
     return { x: event.clientX - rect.left, y: event.clientY - rect.top };
   };
+
+  /** Keep hit targets roughly constant in screen pixels across zoom levels. */
+  const hit = (radius: number) => radius / zoom;
 
   const wantsPan = (event: React.PointerEvent) =>
     event.button === 1 || event.button === 2 || (event.button === 0 && spaceHeld);
@@ -194,12 +278,12 @@ export function MoleculeCanvas({
     }
     if (event.button !== 0 || readOnly) return;
     const p = local(event);
-    const atom = atomAt(molecule, p);
+    const atom = atomAt(molecule, p, hit(16));
 
     if (tool.kind === "erase") {
       if (atom) onChange(removeAtom(molecule, atom.id));
       else {
-        const bond = bondAt(molecule, p);
+        const bond = bondAt(molecule, p, hit(10));
         if (bond) onChange(removeBond(molecule, bond.id));
       }
       return;
@@ -223,7 +307,7 @@ export function MoleculeCanvas({
       return;
     }
 
-    const bond = bondAt(molecule, p);
+    const bond = bondAt(molecule, p, hit(10));
     if (bond) {
       if (tool.kind !== "bond") return;
       const next = bond.order === tool.order ? 1 : tool.order;
@@ -247,12 +331,12 @@ export function MoleculeCanvas({
     if (readOnly) return;
     const p = local(event);
     if (!drag) {
-      const atom = atomAt(molecule, p);
+      const atom = atomAt(molecule, p, hit(16));
       setHover(atom?.id ?? null);
       return;
     }
-    const moved = drag.moved || distance(p, drag.from) > 6;
-    const target = molecule.atoms.find((a) => a.id !== drag.fromId && distance(a, p) <= 18);
+    const moved = drag.moved || distance(p, drag.from) > hit(6);
+    const target = molecule.atoms.find((a) => a.id !== drag.fromId && distance(a, p) <= hit(18));
     setDrag({
       ...drag,
       moved,
@@ -351,7 +435,7 @@ export function MoleculeCanvas({
             <circle cx="1" cy="1" r="1" fill="#e4e4e7" />
           </pattern>
         </defs>
-        <g transform={`translate(${pan.x} ${pan.y})`}>
+        <g transform={`translate(${pan.x} ${pan.y}) scale(${zoom})`}>
           <rect x={-4000} y={-4000} width={8000} height={8000} fill="url(#dots)" />
 
         {/* faint skeleton of what to draw */}
@@ -446,32 +530,74 @@ export function MoleculeCanvas({
           );
         })}
 
-        {/* breakdown highlight */}
-        {molecule.bonds
-          .filter((b) => highlightBonds.has(b.id))
-          .map((bond) => {
-            const a = byId.get(bond.a);
-            const b = byId.get(bond.b);
-            if (!a || !b) return null;
-            return (
-              <line
-                key={`hl-${bond.id}`}
-                x1={a.x}
-                y1={a.y}
-                x2={b.x}
-                y2={b.y}
-                stroke={accent}
-                strokeWidth={16}
-                strokeLinecap="round"
-                opacity={0.18}
-              />
-            );
-          })}
-        {molecule.atoms
-          .filter((a) => highlightAtoms.has(a.id))
-          .map((a) => (
-            <circle key={`hla-${a.id}`} cx={a.x} cy={a.y} r={11} fill={accent} opacity={0.18} />
-          ))}
+        {/* breakdown / overview highlight */}
+        {activeLayers
+          ? activeLayers.flatMap((layer) => {
+              const color = ACCENT[layer.accent];
+              const bondLines = molecule.bonds
+                .filter((b) => layer.bonds?.includes(b.id))
+                .map((bond) => {
+                  const a = byId.get(bond.a);
+                  const b = byId.get(bond.b);
+                  if (!a || !b) return null;
+                  return (
+                    <line
+                      key={`hl-${layer.accent}-${bond.id}`}
+                      x1={a.x}
+                      y1={a.y}
+                      x2={b.x}
+                      y2={b.y}
+                      stroke={color}
+                      strokeWidth={16}
+                      strokeLinecap="round"
+                      opacity={0.2}
+                    />
+                  );
+                });
+              const atomDots = molecule.atoms
+                .filter((a) => layer.atoms?.includes(a.id))
+                .map((a) => (
+                  <circle
+                    key={`hla-${layer.accent}-${a.id}`}
+                    cx={a.x}
+                    cy={a.y}
+                    r={11}
+                    fill={color}
+                    opacity={0.16}
+                  />
+                ));
+              return [...bondLines, ...atomDots];
+            })
+          : null}
+        {!activeLayers
+          ? molecule.bonds
+              .filter((b) => highlightBonds.has(b.id))
+              .map((bond) => {
+                const a = byId.get(bond.a);
+                const b = byId.get(bond.b);
+                if (!a || !b) return null;
+                return (
+                  <line
+                    key={`hl-${bond.id}`}
+                    x1={a.x}
+                    y1={a.y}
+                    x2={b.x}
+                    y2={b.y}
+                    stroke={accent}
+                    strokeWidth={16}
+                    strokeLinecap="round"
+                    opacity={0.18}
+                  />
+                );
+              })
+          : null}
+        {!activeLayers
+          ? molecule.atoms
+              .filter((a) => highlightAtoms.has(a.id))
+              .map((a) => (
+                <circle key={`hla-${a.id}`} cx={a.x} cy={a.y} r={11} fill={accent} opacity={0.18} />
+              ))
+          : null}
         {molecule.atoms
           .filter((a) => errorSet.has(a.id))
           .map((a) => (
@@ -502,7 +628,12 @@ export function MoleculeCanvas({
           const y2 = b.y - uy * trimB;
           const px = -uy;
           const py = ux;
-          const stroke = highlightBonds.has(bond.id) ? accent : "#18181b";
+          const layerAccent = bondAccent.get(bond.id);
+          const stroke = layerAccent
+            ? ACCENT[layerAccent]
+            : highlightBonds.has(bond.id)
+              ? accent
+              : "#18181b";
           const offsets = bond.order === 1 ? [0] : bond.order === 2 ? [-3.2, 3.2] : [-5, 0, 5];
           return (
             <g key={bond.id}>
@@ -525,6 +656,7 @@ export function MoleculeCanvas({
         {molecule.atoms.map((atom) => {
           const label = labelFor(atom.id);
           const bondCount = molecule.bonds.filter((b) => b.a === atom.id || b.b === atom.id).length;
+          const atomTint = atomAccent.get(atom.id);
           return (
             <g key={atom.id}>
               {label ? (
@@ -534,7 +666,7 @@ export function MoleculeCanvas({
                   textAnchor="middle"
                   dominantBaseline="central"
                   fontSize={14}
-                  fill={ELEMENT_COLOR[atom.element]}
+                  fill={atomTint ? ACCENT[atomTint] : ELEMENT_COLOR[atom.element]}
                   stroke="#fff"
                   strokeWidth={5}
                   paintOrder="stroke"
@@ -543,7 +675,12 @@ export function MoleculeCanvas({
                   {label}
                 </text>
               ) : bondCount === 0 ? (
-                <circle cx={atom.x} cy={atom.y} r={3.5} fill="#18181b" />
+                <circle
+                  cx={atom.x}
+                  cy={atom.y}
+                  r={3.5}
+                  fill={atomTint ? ACCENT[atomTint] : "#18181b"}
+                />
               ) : null}
               <circle
                 cx={atom.x}
@@ -557,22 +694,23 @@ export function MoleculeCanvas({
           );
         })}
 
-        {Object.entries(highlight?.numbers ?? {}).map(([id, number]) => {
+        {Object.entries(highlight?.numbers ?? overviewNumbers?.numbers ?? {}).map(([id, number]) => {
           const atom = byId.get(id);
           if (!atom) return null;
           const dir = outward.get(id) ?? { x: 0, y: -1 };
           const cx = atom.x + dir.x * 18;
           const cy = atom.y + dir.y * 18;
+          const numberColor = ACCENT[overviewNumbers?.accent ?? highlight?.accent ?? "chain"];
           return (
             <g key={`n-${id}`}>
-              <circle cx={cx} cy={cy} r={9} fill="#fff" stroke={accent} strokeWidth={1.5} />
+              <circle cx={cx} cy={cy} r={9} fill="#fff" stroke={numberColor} strokeWidth={1.5} />
               <text
                 x={cx}
                 y={cy}
                 textAnchor="middle"
                 dominantBaseline="central"
                 fontSize={10}
-                fill={accent}
+                fill={numberColor}
                 className="font-semibold"
               >
                 {number}
@@ -603,8 +741,8 @@ export function MoleculeCanvas({
           key={`${label.text}-${label.x}-${label.y}`}
           className="pointer-events-none absolute -translate-x-1/2 -translate-y-full whitespace-nowrap rounded-full border bg-background px-2 py-0.5 text-[11px] font-medium shadow-sm"
           style={{
-            left: label.x + pan.x,
-            top: label.y + pan.y,
+            left: label.x * zoom + pan.x,
+            top: label.y * zoom + pan.y,
             color: GUIDE_COLOR[label.kind],
             borderColor: GUIDE_COLOR[label.kind],
           }}
@@ -615,7 +753,7 @@ export function MoleculeCanvas({
 
       {molecule.atoms.length === 0 && !guide?.ghost && !readOnly ? (
         <p className="pointer-events-none absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">
-          Click to place a carbon, drag to draw a bond · Space / middle-drag to pan
+          Click to place a carbon, drag to draw a bond · scroll to zoom · Space / middle-drag to pan
         </p>
       ) : null}
     </div>

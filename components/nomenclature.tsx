@@ -1,6 +1,6 @@
 "use client";
 
-import { MoleculeCanvas, panToCentre, type Tool, type ViewPan } from "@/components/molecule-canvas";
+import { MoleculeCanvas, HIGHLIGHT_COLOR, panToCentre, type Tool, type ViewPan } from "@/components/molecule-canvas";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -28,7 +28,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { GROUP_STAMPS, type GroupStamp } from "@/lib/chem/edit";
 import type { Element } from "@/lib/chem/elements";
-import { explain } from "@/lib/chem/explain";
+import { explain, overviewLayers } from "@/lib/chem/explain";
 import { guideTowards, type Guidance } from "@/lib/chem/guidance";
 import {
   buildRun,
@@ -121,12 +121,14 @@ export function Nomenclature() {
   const [now, setNow] = useState(0);
   const [shareUrl, setShareUrl] = useState("");
   const [pan, setPan] = useState<ViewPan>({ x: 0, y: 0 });
+  const [zoom, setZoom] = useState(1);
+  const nameInputRef = useRef<HTMLInputElement>(null);
 
   const canvasRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 900, height: 600 });
   /** Molecule waiting to be framed once the canvas has a real size. */
   const pendingFocus = useRef<Molecule | null>(null);
-  /** True after the user pans; cleared when we programmatically frame. */
+  /** True after the user pans/zooms; cleared when we programmatically frame. */
   const userPanned = useRef(false);
   const moleculeRef = useRef(molecule);
   const questionFocusRef = useRef<Molecule | null>(null);
@@ -146,6 +148,7 @@ export function Nomenclature() {
   const frameView = useCallback(
     (focus: Molecule | null | undefined) => {
       userPanned.current = false;
+      setZoom(1);
       if (!focus?.atoms.length) {
         setPan({ x: 0, y: 0 });
         pendingFocus.current = null;
@@ -198,13 +201,17 @@ export function Nomenclature() {
     if (pending?.atoms.length) {
       pendingFocus.current = null;
       userPanned.current = false;
+      setZoom(1);
       setPan(panToCentre(pending, size.width, size.height));
       return;
     }
     if (userPanned.current) return;
     const drawn = moleculeRef.current;
     const focus = drawn.atoms.length ? drawn : questionFocusRef.current;
-    if (focus?.atoms.length) setPan(panToCentre(focus, size.width, size.height));
+    if (focus?.atoms.length) {
+      setZoom(1);
+      setPan(panToCentre(focus, size.width, size.height));
+    }
   }, [size]);
 
   useEffect(() => {
@@ -391,9 +398,31 @@ export function Nomenclature() {
     setHintsShown(0);
     setAnswer("");
     setWrong(false);
+    setBreakdownOpen(false);
     setQuestionStart(Date.now());
     showQuestion(questions[nextIndex]);
   }, [index, questions, showQuestion]);
+
+  // Enter advances once the current round is settled.
+  useEffect(() => {
+    if (mode !== "challenge" || phase !== "playing" || !answered) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Enter" || event.repeat) return;
+      if (event.target instanceof HTMLTextAreaElement) return;
+      event.preventDefault();
+      event.stopPropagation();
+      goNext();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [answered, goNext, mode, phase]);
+
+  // Keep the naming field focused for each new name question.
+  useEffect(() => {
+    if (mode !== "challenge" || phase !== "playing" || answered || current?.kind !== "name") return;
+    const id = window.requestAnimationFrame(() => nameInputRef.current?.focus());
+    return () => window.cancelAnimationFrame(id);
+  }, [answered, current, index, mode, phase]);
 
   const handleDraw = useCallback(
     (next: Molecule) => {
@@ -489,7 +518,10 @@ export function Nomenclature() {
   /* ---- render ---- */
 
   const playing = mode === "challenge" && phase === "playing";
+  const wasCorrect = answered && (attempts[attempts.length - 1]?.correct ?? false);
   const highlight = breakdownOpen ? steps[activeStep]?.highlight ?? null : null;
+  const layers =
+    result.ok && wasCorrect && !breakdownOpen ? overviewLayers(result.analysis) : null;
   const showBreakdown = mode === "draw" || (playing && answered);
   const elapsed = playing ? Math.max(now - runStart, 0) : 0;
 
@@ -784,6 +816,7 @@ export function Nomenclature() {
                   {current?.kind === "name" && !answered ? (
                     <>
                       <Input
+                        ref={nameInputRef}
                         autoFocus
                         value={answer}
                         placeholder="type the name…"
@@ -815,9 +848,24 @@ export function Nomenclature() {
                   ) : null}
 
                   {answered ? (
-                    <span className="text-sm font-medium text-emerald-700">
-                      {attempts[attempts.length - 1]?.correct ? "correct" : `it was ${targetName}`}
-                    </span>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-medium text-emerald-700">
+                        {wasCorrect ? "correct" : `it was ${targetName}`}
+                      </span>
+                      {wasCorrect && result.ok ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setBreakdownOpen(true)}
+                        >
+                          <ListOrdered />
+                          Full breakdown
+                        </Button>
+                      ) : null}
+                      <span className="text-xs text-muted-foreground">
+                        Enter for {index + 1 >= questions.length ? "results" : "next"}
+                      </span>
+                    </div>
                   ) : null}
 
                   <div className="ml-auto flex items-center gap-2">
@@ -864,16 +912,35 @@ export function Nomenclature() {
                   onChange={handleDraw}
                   tool={tool}
                   highlight={highlight}
+                  layers={layers}
                   guide={guide}
                   errorAtoms={result.ok ? undefined : result.atoms}
                   showLabels={showLabels}
                   readOnly={playing && current?.kind === "name"}
                   pan={pan}
+                  zoom={zoom}
                   onPanChange={(next) => {
                     userPanned.current = true;
                     setPan(next);
                   }}
+                  onZoomChange={(next) => {
+                    userPanned.current = true;
+                    setZoom(next);
+                  }}
                 />
+                {layers?.length ? (
+                  <div className="pointer-events-none absolute bottom-3 left-3 flex flex-wrap gap-x-3 gap-y-1 rounded-md border bg-background/90 px-2.5 py-1.5 text-[11px] shadow-sm backdrop-blur-sm">
+                    {layers.map((layer) => (
+                      <span key={`${layer.accent}-${layer.label}`} className="inline-flex items-center gap-1.5">
+                        <span
+                          className="size-2.5 shrink-0 rounded-sm"
+                          style={{ backgroundColor: HIGHLIGHT_COLOR[layer.accent] }}
+                        />
+                        {layer.label}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
               </div>
             </>
           )}

@@ -2,11 +2,22 @@ import { GROUP_LABEL } from "./groups";
 import type { Analysis } from "./name";
 import { stem } from "./roots";
 
+export type HighlightAccent = "chain" | "branch" | "bond" | "group" | "cis" | "trans";
+
 export type Highlight = {
   atoms?: string[];
   bonds?: string[];
   numbers?: Record<string, number>;
-  accent?: "chain" | "branch" | "bond" | "group";
+  accent?: HighlightAccent;
+};
+
+/** One colour band in the all-at-once overview (parent, branches, cis/trans, …). */
+export type HighlightLayer = {
+  label: string;
+  accent: HighlightAccent;
+  atoms?: string[];
+  bonds?: string[];
+  numbers?: Record<string, number>;
 };
 
 export type Step = {
@@ -195,7 +206,11 @@ function stereoStep(a: Analysis): Step | null {
     chip: many
       ? a.stereo.map((s) => `${s.descriptor}-${s.locant}`).join(",")
       : `${first.descriptor}-${first.locant}`,
-    highlight: { bonds: a.stereo.map((s) => s.bondId), atoms: a.atoms, accent: "bond" },
+    highlight: {
+      bonds: a.stereo.map((s) => s.bondId),
+      atoms: a.atoms,
+      accent: many ? "bond" : first.descriptor,
+    },
   };
 }
 
@@ -272,4 +287,70 @@ export function explain(analysis: Analysis): Step[] {
   if (alphabet) steps.push(alphabet);
   steps.push(finalStep(analysis));
   return steps.map((step, i) => ({ ...step, title: `${i + 1}. ${step.title}` }));
+}
+
+/**
+ * All naming features at once — used right after a correct answer so the
+ * molecule lights up with a colour key instead of stepping one rule at a time.
+ */
+export function overviewLayers(a: Analysis): HighlightLayer[] {
+  const layers: HighlightLayer[] = [
+    {
+      label: a.kind === "benzene" ? "Benzene" : a.kind === "ring" ? "Parent ring" : "Parent chain",
+      accent: "chain",
+      atoms: a.atoms,
+      bonds: a.bonds,
+      numbers: a.numbers,
+    },
+  ];
+
+  if (a.pcg) {
+    layers.push({
+      label: GROUP_LABEL[a.pcg],
+      accent: "group",
+      atoms: a.pcgAtoms,
+      bonds: a.pcgBonds,
+    });
+  }
+
+  const branchAtoms = a.groups.flatMap((g) => g.atoms);
+  const branchBonds = a.groups.flatMap((g) => g.bonds);
+  if (branchAtoms.length || branchBonds.length) {
+    layers.push({
+      label: a.groups.length === 1 ? a.groups[0].name : "Substituents",
+      accent: "branch",
+      atoms: branchAtoms,
+      bonds: branchBonds,
+    });
+  }
+
+  const stereoIds = new Set(a.stereo.map((s) => s.bondId));
+  const plainUnsat = [...a.eneBonds, ...a.yneBonds].filter((id) => !stereoIds.has(id));
+  if (plainUnsat.length) {
+    layers.push({
+      label: a.yneBonds.length && !a.eneBonds.length ? "Triple bond" : "Double bond",
+      accent: "bond",
+      bonds: plainUnsat,
+    });
+  }
+
+  const cis = a.stereo.filter((s) => s.descriptor === "cis");
+  if (cis.length) {
+    layers.push({
+      label: cis.length === 1 ? `cis-${cis[0].locant}` : "cis",
+      accent: "cis",
+      bonds: cis.map((s) => s.bondId),
+    });
+  }
+
+  const trans = a.stereo.filter((s) => s.descriptor === "trans");
+  if (trans.length) {
+    layers.push({
+      label: trans.length === 1 ? `trans-${trans[0].locant}` : "trans",
+      accent: "trans",
+      bonds: trans.map((s) => s.bondId),
+    });
+  }
+
+  return layers;
 }
