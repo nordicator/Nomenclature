@@ -1,5 +1,11 @@
 "use client";
 
+import {
+  AnnotationBar,
+  EMPTY_ANNOTATIONS,
+  type Annotations,
+  type MarkTool,
+} from "@/components/annotation-bar";
 import { MoleculeCanvas, HIGHLIGHT_COLOR, panToCentre, type Tool, type ViewPan } from "@/components/molecule-canvas";
 import {
   AlertDialog,
@@ -122,6 +128,8 @@ export function Nomenclature() {
   const [shareUrl, setShareUrl] = useState("");
   const [pan, setPan] = useState<ViewPan>({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
+  const [annotations, setAnnotations] = useState<Annotations>(EMPTY_ANNOTATIONS);
+  const [markTool, setMarkTool] = useState<MarkTool | null>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
 
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -291,6 +299,8 @@ export function Nomenclature() {
 
   const showQuestion = useCallback(
     (question: Question) => {
+      setAnnotations(EMPTY_ANNOTATIONS);
+      setMarkTool(null);
       if (question.kind === "name") {
         resetCanvas(question.challenge.molecule);
       } else {
@@ -383,6 +393,10 @@ export function Nomenclature() {
         { correct, revealed, hints: hintsShown, ms: Date.now() - questionStart },
       ]);
       setAnswered(true);
+      if (correct) {
+        setAnnotations(EMPTY_ANNOTATIONS);
+        setMarkTool(null);
+      }
     },
     [hintsShown, questionStart],
   );
@@ -464,7 +478,7 @@ export function Nomenclature() {
   }, [current, style]);
 
   const guide: Guidance | null = useMemo(() => {
-    if (mode !== "challenge" || phase !== "playing" || hintsShown === 0) return null;
+    if (mode !== "challenge" || phase !== "playing" || answered || hintsShown === 0) return null;
     if (current?.kind === "name") {
       const step = targetSteps[Math.min(hintsShown, targetSteps.length) - 1];
       if (!step) return null;
@@ -483,7 +497,7 @@ export function Nomenclature() {
     }
     if (!drawGuide || solved) return null;
     return { ...drawGuide, markers: drawGuide.markers.slice(0, hintsShown) };
-  }, [current, drawGuide, hintsShown, mode, phase, solved, targetSteps]);
+  }, [answered, current, drawGuide, hintsShown, mode, phase, solved, targetSteps]);
 
   const centreView = useCallback(() => {
     const focus =
@@ -519,7 +533,13 @@ export function Nomenclature() {
 
   const playing = mode === "challenge" && phase === "playing";
   const wasCorrect = answered && (attempts[attempts.length - 1]?.correct ?? false);
-  const highlight = breakdownOpen ? steps[activeStep]?.highlight ?? null : null;
+  const nameHintHighlight =
+    playing && !answered && current?.kind === "name" && hintsShown > 0
+      ? (targetSteps[Math.min(hintsShown, targetSteps.length) - 1]?.highlight ?? null)
+      : null;
+  const highlight = breakdownOpen
+    ? (steps[activeStep]?.highlight ?? null)
+    : nameHintHighlight;
   const layers =
     result.ok && wasCorrect && !breakdownOpen ? overviewLayers(result.analysis) : null;
   const showBreakdown = mode === "draw" || (playing && answered);
@@ -691,7 +711,11 @@ export function Nomenclature() {
                   variant="outline"
                   size="sm"
                   value={toolId}
-                  onValueChange={(value) => value && setToolId(value)}
+                  onValueChange={(value) => {
+                    if (!value) return;
+                    setToolId(value);
+                    setMarkTool(null);
+                  }}
                 >
                   {BOND_TOOLS.map((item) => (
                     <ToggleGroupItem key={item.id} value={item.id} aria-label={item.label} title={item.label}>
@@ -710,7 +734,11 @@ export function Nomenclature() {
                   variant="outline"
                   size="sm"
                   value={toolId}
-                  onValueChange={(value) => value && setToolId(value)}
+                  onValueChange={(value) => {
+                    if (!value) return;
+                    setToolId(value);
+                    setMarkTool(null);
+                  }}
                 >
                   {ATOM_TOOLS.map((el) => (
                     <ToggleGroupItem key={el} value={`atom:${el}`} aria-label={el} title={`Draw ${el}`}>
@@ -726,7 +754,11 @@ export function Nomenclature() {
                   variant="outline"
                   size="sm"
                   value={toolId}
-                  onValueChange={(value) => value && setToolId(value)}
+                  onValueChange={(value) => {
+                    if (!value) return;
+                    setToolId(value);
+                    setMarkTool(null);
+                  }}
                 >
                   {STAMP_TOOLS.map((stamp) => (
                     <ToggleGroupItem
@@ -812,6 +844,18 @@ export function Nomenclature() {
               </div>
 
               {playing ? (
+                <AnnotationBar
+                  tool={markTool}
+                  onToolChange={setMarkTool}
+                  hasMarks={
+                    Object.keys(annotations.numbers).length > 0 ||
+                    Object.keys(annotations.inks).length > 0
+                  }
+                  onClear={() => setAnnotations(EMPTY_ANNOTATIONS)}
+                />
+              ) : null}
+
+              {playing ? (
                 <div className="flex flex-wrap items-center gap-2 border-b bg-muted/40 px-3 py-1.5">
                   {current?.kind === "name" && !answered ? (
                     <>
@@ -891,6 +935,8 @@ export function Nomenclature() {
                         size="sm"
                         onClick={() => {
                           finish(false, true);
+                          setAnnotations(EMPTY_ANNOTATIONS);
+                          setMarkTool(null);
                           if (current?.kind === "draw" && current) {
                             resetCanvas(current.challenge.molecule);
                           }
@@ -917,6 +963,9 @@ export function Nomenclature() {
                   errorAtoms={result.ok ? undefined : result.atoms}
                   showLabels={showLabels}
                   readOnly={playing && current?.kind === "name"}
+                  annotations={playing ? annotations : undefined}
+                  onAnnotationsChange={playing ? setAnnotations : undefined}
+                  markTool={playing ? markTool : null}
                   pan={pan}
                   zoom={zoom}
                   onPanChange={(next) => {

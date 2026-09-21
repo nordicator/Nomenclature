@@ -28,6 +28,8 @@ import type { Guidance } from "@/lib/chem/guidance";
 import { BOND_LENGTH } from "@/lib/chem/smiles";
 import type { BondOrder, Molecule } from "@/lib/chem/types";
 import { cn } from "@/lib/utils";
+import type { Annotations, MarkTool } from "@/components/annotation-bar";
+import { EMPTY_ANNOTATIONS } from "@/components/annotation-bar";
 
 export type ViewPan = Point;
 
@@ -104,6 +106,10 @@ type Props = {
   /** View scale — scroll wheel zooms toward the cursor. */
   zoom?: number;
   onZoomChange?: (zoom: number) => void;
+  /** Challenge-mode scratch marks (carbon numbers + bond inks). */
+  annotations?: Annotations;
+  onAnnotationsChange?: (next: Annotations) => void;
+  markTool?: MarkTool | null;
   className?: string;
 };
 
@@ -124,6 +130,9 @@ export function MoleculeCanvas({
   onPanChange,
   zoom = 1,
   onZoomChange,
+  annotations = EMPTY_ANNOTATIONS,
+  onAnnotationsChange,
+  markTool = null,
   className,
 }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
@@ -269,6 +278,50 @@ export function MoleculeCanvas({
   const canBond = (id: string | undefined, order: BondOrder) =>
     !id || atomValence(molecule, id) + order <= MAX_VALENCE[elementOf(molecule, id)];
 
+  const applyMark = (event: React.PointerEvent) => {
+    if (!markTool || !onAnnotationsChange) return false;
+    const p = local(event);
+    const atom = atomAt(molecule, p, hit(16));
+    const bond = atom ? undefined : bondAt(molecule, p, hit(12));
+
+    if (markTool.kind === "number") {
+      if (!atom || atom.element !== "C") return true;
+      const numbers = { ...annotations.numbers };
+      if (numbers[atom.id] != null) {
+        delete numbers[atom.id];
+      } else {
+        const next = Math.max(0, ...Object.values(numbers), 0) + 1;
+        numbers[atom.id] = next;
+      }
+      onAnnotationsChange({ ...annotations, numbers });
+      return true;
+    }
+
+    if (markTool.kind === "ink") {
+      if (!bond) return true;
+      const inks = { ...annotations.inks };
+      if (inks[bond.id] === markTool.color) delete inks[bond.id];
+      else inks[bond.id] = markTool.color;
+      onAnnotationsChange({ ...annotations, inks });
+      return true;
+    }
+
+    // wipe
+    if (atom && annotations.numbers[atom.id] != null) {
+      const numbers = { ...annotations.numbers };
+      delete numbers[atom.id];
+      onAnnotationsChange({ ...annotations, numbers });
+      return true;
+    }
+    if (bond && annotations.inks[bond.id] != null) {
+      const inks = { ...annotations.inks };
+      delete inks[bond.id];
+      onAnnotationsChange({ ...annotations, inks });
+      return true;
+    }
+    return true;
+  };
+
   const onPointerDown = (event: React.PointerEvent) => {
     if (wantsPan(event) && onPanChange) {
       event.preventDefault();
@@ -276,7 +329,9 @@ export function MoleculeCanvas({
       setPanDrag({ origin: screen(event), start: pan });
       return;
     }
-    if (event.button !== 0 || readOnly) return;
+    if (event.button !== 0) return;
+    if (markTool && applyMark(event)) return;
+    if (readOnly) return;
     const p = local(event);
     const atom = atomAt(molecule, p, hit(16));
 
@@ -328,13 +383,14 @@ export function MoleculeCanvas({
       });
       return;
     }
-    if (readOnly) return;
+    if (readOnly && !markTool) return;
     const p = local(event);
     if (!drag) {
       const atom = atomAt(molecule, p, hit(16));
       setHover(atom?.id ?? null);
       return;
     }
+    if (readOnly) return;
     const moved = drag.moved || distance(p, drag.from) > hit(6);
     const target = molecule.atoms.find((a) => a.id !== drag.fromId && distance(a, p) <= hit(18));
     setDrag({
@@ -417,11 +473,13 @@ export function MoleculeCanvas({
             ? panDrag
               ? "cursor-grabbing"
               : "cursor-grab"
-            : readOnly
-              ? "cursor-default"
-              : tool.kind === "erase" || tool.kind === "group"
-                ? "cursor-pointer"
-                : "cursor-crosshair",
+            : markTool
+              ? "cursor-pointer"
+              : readOnly
+                ? "cursor-default"
+                : tool.kind === "erase" || tool.kind === "group"
+                  ? "cursor-pointer"
+                  : "cursor-crosshair",
         )}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
@@ -463,38 +521,45 @@ export function MoleculeCanvas({
         {/* guide markers */}
         {[...(guide?.markers ?? []), ...(guide?.errors ?? [])].map((marker) => {
           const color = GUIDE_COLOR[marker.kind];
+          // When a real highlight is on (name hints / breakdown), skip the soft glow —
+          // keep only placement cues and the dashed "add here" cross.
+          const glow = !highlight;
           return (
             <g key={marker.id} pointerEvents="none">
-              {marker.bonds?.map((bondId) => {
-                const bond =
-                  molecule.bonds.find((b) => b.id === bondId) ??
-                  guide?.ghost?.bonds.find((b) => b.id === bondId);
-                if (!bond) return null;
-                const a = byId.get(bond.a) ?? ghostById.get(bond.a);
-                const b = byId.get(bond.b) ?? ghostById.get(bond.b);
-                if (!a || !b) return null;
-                return (
-                  <line
-                    key={bondId}
-                    x1={a.x}
-                    y1={a.y}
-                    x2={b.x}
-                    y2={b.y}
-                    stroke={color}
-                    strokeWidth={14}
-                    strokeLinecap="round"
-                    opacity={0.2}
-                  />
-                );
-              })}
-              {marker.atoms?.map((id) => {
-                // the ghost skeleton already reads as "draw this", so don't double up on it
-                const atom = byId.get(id);
-                if (!atom) return null;
-                return (
-                  <circle key={id} cx={atom.x} cy={atom.y} r={12} fill={color} opacity={0.16} />
-                );
-              })}
+              {glow
+                ? marker.bonds?.map((bondId) => {
+                    const bond =
+                      molecule.bonds.find((b) => b.id === bondId) ??
+                      guide?.ghost?.bonds.find((b) => b.id === bondId);
+                    if (!bond) return null;
+                    const a = byId.get(bond.a) ?? ghostById.get(bond.a);
+                    const b = byId.get(bond.b) ?? ghostById.get(bond.b);
+                    if (!a || !b) return null;
+                    return (
+                      <line
+                        key={bondId}
+                        x1={a.x}
+                        y1={a.y}
+                        x2={b.x}
+                        y2={b.y}
+                        stroke={color}
+                        strokeWidth={14}
+                        strokeLinecap="round"
+                        opacity={0.2}
+                      />
+                    );
+                  })
+                : null}
+              {glow
+                ? marker.atoms?.map((id) => {
+                    // the ghost skeleton already reads as "draw this", so don't double up on it
+                    const atom = byId.get(id);
+                    if (!atom) return null;
+                    return (
+                      <circle key={id} cx={atom.x} cy={atom.y} r={12} fill={color} opacity={0.16} />
+                    );
+                  })
+                : null}
               {marker.point ? (
                 <g>
                   <circle
@@ -613,6 +678,28 @@ export function MoleculeCanvas({
             />
           ))}
 
+        {/* user bond inks (challenge marks) */}
+        {molecule.bonds
+          .filter((b) => annotations.inks[b.id])
+          .map((bond) => {
+            const a = byId.get(bond.a);
+            const b = byId.get(bond.b);
+            if (!a || !b) return null;
+            return (
+              <line
+                key={`ink-${bond.id}`}
+                x1={a.x}
+                y1={a.y}
+                x2={b.x}
+                y2={b.y}
+                stroke={annotations.inks[bond.id]}
+                strokeWidth={14}
+                strokeLinecap="round"
+                opacity={0.35}
+              />
+            );
+          })}
+
         {molecule.bonds.map((bond) => {
           const a = byId.get(bond.a);
           const b = byId.get(bond.b);
@@ -628,12 +715,15 @@ export function MoleculeCanvas({
           const y2 = b.y - uy * trimB;
           const px = -uy;
           const py = ux;
+          const ink = annotations.inks[bond.id];
           const layerAccent = bondAccent.get(bond.id);
           const stroke = layerAccent
             ? ACCENT[layerAccent]
             : highlightBonds.has(bond.id)
               ? accent
-              : "#18181b";
+              : ink
+                ? ink
+                : "#18181b";
           const offsets = bond.order === 1 ? [0] : bond.order === 2 ? [-3.2, 3.2] : [-5, 0, 5];
           return (
             <g key={bond.id}>
@@ -711,6 +801,33 @@ export function MoleculeCanvas({
                 dominantBaseline="central"
                 fontSize={10}
                 fill={numberColor}
+                className="font-semibold"
+              >
+                {number}
+              </text>
+            </g>
+          );
+        })}
+
+        {Object.entries(annotations.numbers).map(([id, number]) => {
+          const atom = byId.get(id);
+          if (!atom) return null;
+          const dir = outward.get(id) ?? { x: 0, y: -1 };
+          const hasOfficial = Boolean(
+            (highlight?.numbers ?? overviewNumbers?.numbers)?.[id] != null,
+          );
+          const cx = atom.x + dir.x * (hasOfficial ? 32 : 18);
+          const cy = atom.y + dir.y * (hasOfficial ? 32 : 18);
+          return (
+            <g key={`mark-n-${id}`} pointerEvents="none">
+              <circle cx={cx} cy={cy} r={9} fill="#fafaf9" stroke="#78716c" strokeWidth={1.25} />
+              <text
+                x={cx}
+                y={cy}
+                textAnchor="middle"
+                dominantBaseline="central"
+                fontSize={10}
+                fill="#57534e"
                 className="font-semibold"
               >
                 {number}
